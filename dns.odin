@@ -76,6 +76,12 @@ header_write_buf :: proc(header: DnsHeader, buf: ^bytes.Buffer) {
     bytes.buffer_write(buf, header_bytes[:])
 }
 
+header_from_reader :: proc(rdr: ^bytes.Reader) -> DnsHeader {
+    buf : [12]u8
+    bytes_read, _ := bytes.reader_read(rdr, buf[:])
+    return transmute(DnsHeader) buf
+}
+
 DnsQuestion :: struct {
     name: string,
     type: u16be,
@@ -101,4 +107,13 @@ question_write_buf :: proc(question: DnsQuestion, buf: ^bytes.Buffer) {
 
     class_bytes := transmute([2]u8)question.class
     bytes.buffer_write(buf, class_bytes[:])
+}
+
+@(test)
+test_read_response :: proc(t: ^testing.T) {
+    response := "`V\x81\x80\x00\x01\x00\x01\x00\x00\x00\x00\x03www\x07example\x03com\x00\x00\x01\x00\x01\xc0\x0c\x00\x01\x00\x01\x00\x00R\x9b\x00\x04]\xb8\xd8"
+    response_rdr : bytes.Reader
+    bytes.reader_init(&response_rdr, transmute([]u8) response)
+
+    testing.expect_value(t, header_from_reader(&response_rdr), DnsHeader { id = 24662, flags = 33152, num_questions = 1, num_answers = 1, num_authorities = 0, num_additionals = 0 })
 }
