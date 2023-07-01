@@ -13,7 +13,28 @@ TYPE_A : u16be = 1;
 CLASS_IN : u16be = 1;
 RECURSION_DESIRED : u16be = 1 << 8;
 
-main :: proc() {}
+main :: proc() {
+    send_buf : bytes.Buffer
+    bytes.buffer_reset(&send_buf)
+
+    rng := rand.create(1);
+    id := cast(u16be) rand.int_max(65_535, &rng)
+    write_query(id, "www.example.com", TYPE_A, &send_buf);
+
+    sock, _err := net.make_unbound_udp_socket(net.Address_Family.IP4)
+    defer net.close(sock)
+
+    addr := net.Endpoint {
+        address = cast(net.IP4_Address){ 8, 8, 8, 8 },
+        port = 53,
+    }
+    _, err := net.send_udp(sock, bytes.buffer_to_bytes(&send_buf), addr);
+
+    recv_buf : [1024]u8
+    bytes_read, _, _ := net.recv_udp(sock, recv_buf[:]);
+
+    fmt.printf("%s\n", hex.encode(recv_buf[0:bytes_read]))
+}
 
 write_query :: proc(id: u16be, domain_name: string, record_type: u16be, buf: ^bytes.Buffer) {
     header := DnsHeader{
