@@ -171,15 +171,61 @@ record_from_reader :: proc(rdr: ^bytes.Reader) -> DnsRecord {
     )
 }
 
+DnsPacket :: struct {
+    header:      DnsHeader,
+    questions:   []DnsQuestion,
+    answers:     []DnsRecord,
+    authorities: []DnsRecord,
+    additionals: []DnsRecord,
+}
+
+packet_from_reader :: proc(rdr: ^bytes.Reader) -> DnsPacket {
+    header := header_from_reader(rdr)
+
+    questions: [dynamic]DnsQuestion
+    for _ in 0 ..< header.num_questions {
+        question := question_from_reader(rdr)
+        append(&questions, question)
+    }
+    answers: [dynamic]DnsRecord
+    for _ in 0 ..< header.num_answers {
+        record := record_from_reader(rdr)
+        append(&answers, record)
+    }
+    authorities: [dynamic]DnsRecord
+    for _ in 0 ..< header.num_authorities {
+        record := record_from_reader(rdr)
+        append(&authorities, record)
+    }
+    additionals: [dynamic]DnsRecord
+    for _ in 0 ..< header.num_additionals {
+        record := record_from_reader(rdr)
+        append(&additionals, record)
+    }
+
+    return(
+        DnsPacket{
+            header = header,
+            questions = questions[:],
+            answers = answers[:],
+            authorities = authorities[:],
+            additionals = additionals[:],
+        } \
+    )
+}
+
 @(test)
 test_read_response :: proc(t: ^testing.T) {
-    response := "`V\x81\x80\x00\x01\x00\x01\x00\x00\x00\x00\x03www\x07example\x03com\x00\x00\x01\x00\x01\xc0\x0c\x00\x01\x00\x01\x00\x00R\x9b\x00\x04]\xb8\xd8\""
+    response := "`V\x81\x80\x00\x01\x00\x01\x00\x00\x00\x00\x03www\x07example\x03com\x00\x00\x01\x00\x01\xc0\x0c\x00\x01\x00\x01\x00\x00R\x9b\x00\x04]\xb8\xd8\x22"
+
     response_rdr: bytes.Reader
     bytes.reader_init(&response_rdr, transmute([]u8)response)
 
+    packet := packet_from_reader(&response_rdr)
+
     testing.expect_value(
         t,
-        header_from_reader(&response_rdr),
+        packet.header,
         DnsHeader{
             id = 24662,
             flags = 33152,
@@ -190,17 +236,22 @@ test_read_response :: proc(t: ^testing.T) {
         },
     )
 
-    question := question_from_reader(&response_rdr)
+    testing.expect_value(t, len(packet.questions), 1)
+    question := packet.questions[0]
     testing.expect_value(t, question.name, "www.example.com")
     testing.expect_value(t, question.type, 1)
     testing.expect_value(t, question.class, 1)
 
-    record := record_from_reader(&response_rdr)
+    testing.expect_value(t, len(packet.answers), 1)
+    record := packet.answers[0]
     testing.expect_value(t, record.name, "www.example.com")
     testing.expect_value(t, record.type, 1)
     testing.expect_value(t, record.class, 1)
     testing.expect_value(t, record.ttl, 21147)
-    testing.expect(t, slice.equal(record.data, transmute([]u8)string("]\xb8\xd8\"")))
+    testing.expect(t, slice.equal(record.data, transmute([]u8)string("]\xb8\xd8\x22")))
+
+    testing.expect_value(t, len(packet.authorities), 0)
+    testing.expect_value(t, len(packet.additionals), 0)
 }
 
 // caller frees
