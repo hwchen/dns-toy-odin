@@ -15,7 +15,6 @@ RECURSION_DESIRED : u16be = 1 << 8;
 
 main :: proc() {
     send_buf : bytes.Buffer
-    bytes.buffer_reset(&send_buf)
 
     rng := rand.create(1);
     id := cast(u16be) rand.int_max(65_535, &rng)
@@ -55,8 +54,6 @@ write_query :: proc(id: u16be, domain_name: string, record_type: u16be, buf: ^by
 @(test)
 test_write_query :: proc(t: ^testing.T) {
     buf: bytes.Buffer
-    bytes.buffer_reset(&buf)
-
     write_query(0x8298, "www.example.com", TYPE_A, &buf)
     expected, _ := hex.decode(transmute([]u8) string("82980100000100000000000003777777076578616d706c6503636f6d0000010001"))
     testing.expect(t, slice.equal(bytes.buffer_to_bytes(&buf), expected))
@@ -78,7 +75,7 @@ header_write_buf :: proc(header: DnsHeader, buf: ^bytes.Buffer) {
 
 header_from_reader :: proc(rdr: ^bytes.Reader) -> DnsHeader {
     buf : [12]u8
-    bytes_read, _ := bytes.reader_read(rdr, buf[:])
+    bytes.reader_read(rdr, buf[:])
     return transmute(DnsHeader) buf
 }
 
@@ -109,6 +106,23 @@ question_write_buf :: proc(question: DnsQuestion, buf: ^bytes.Buffer) {
     bytes.buffer_write(buf, class_bytes[:])
 }
 
+question_from_reader :: proc(rdr: ^bytes.Reader) -> DnsQuestion {
+    name := parse_domain_name(rdr)
+
+    type_bytes : [2]u8
+    bytes.reader_read(rdr, type_bytes[:])
+
+    class_bytes : [2]u8
+    bytes.reader_read(rdr, class_bytes[:])
+
+    return DnsQuestion {
+        name = string(name),
+        type =  transmute(u16be) type_bytes,
+        class =  transmute(u16be) class_bytes,
+}
+
+}
+
 @(test)
 test_read_response :: proc(t: ^testing.T) {
     response := "`V\x81\x80\x00\x01\x00\x01\x00\x00\x00\x00\x03www\x07example\x03com\x00\x00\x01\x00\x01\xc0\x0c\x00\x01\x00\x01\x00\x00R\x9b\x00\x04]\xb8\xd8"
@@ -116,6 +130,11 @@ test_read_response :: proc(t: ^testing.T) {
     bytes.reader_init(&response_rdr, transmute([]u8) response)
 
     testing.expect_value(t, header_from_reader(&response_rdr), DnsHeader { id = 24662, flags = 33152, num_questions = 1, num_answers = 1, num_authorities = 0, num_additionals = 0 })
+
+    question := question_from_reader(&response_rdr)
+    testing.expect_value(t, question.name, "www.example.com")
+    testing.expect_value(t, question.type, 1)
+    testing.expect_value(t, question.class, 1)
 }
 
 // caller frees
