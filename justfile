@@ -1,5 +1,5 @@
-run:
-    odin run .
+run *args='':
+    odin run . -- {{args}}
 
 test:
     odin test .

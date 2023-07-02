@@ -6,6 +6,7 @@ import "core:encoding/hex"
 import "core:net"
 import "core:io"
 import "core:math/rand"
+import "core:os"
 import "core:slice"
 import "core:strings"
 import "core:testing"
@@ -15,11 +16,17 @@ CLASS_IN: u16be = 1
 RECURSION_DESIRED: u16be = 1 << 8
 
 main :: proc() {
+    if len(os.args) == 1 {
+        fmt.eprintln("Must supply a domain to resolve")
+        os.exit(1)
+    }
+    domain := os.args[1]
+
     send_buf: bytes.Buffer
 
     rng := rand.create(1)
     id := cast(u16be)rand.int_max(65_535, &rng)
-    write_query(id, "www.example.com", TYPE_A, &send_buf)
+    write_query(id, domain, TYPE_A, &send_buf)
 
     sock, _err := net.make_unbound_udp_socket(net.Address_Family.IP4)
     defer net.close(sock)
@@ -33,7 +40,14 @@ main :: proc() {
     recv_buf: [1024]u8
     bytes_read, _, _ := net.recv_udp(sock, recv_buf[:])
 
-    fmt.printf("%s\n", hex.encode(recv_buf[0:bytes_read]))
+    fmt.printf("raw response: %s\n", hex.encode(recv_buf[0:bytes_read]))
+
+    resp_rdr: bytes.Reader
+    bytes.reader_init(&resp_rdr, recv_buf[:bytes_read])
+    packet := packet_from_reader(&resp_rdr)
+    for answer in packet.answers {
+        fmt.printf("answer: %s\n", ip_to_string(answer.data))
+    }
 }
 
 write_query :: proc(id: u16be, domain_name: string, record_type: u16be, buf: ^bytes.Buffer) {
@@ -249,6 +263,7 @@ test_read_response :: proc(t: ^testing.T) {
     testing.expect_value(t, record.class, 1)
     testing.expect_value(t, record.ttl, 21147)
     testing.expect(t, slice.equal(record.data, transmute([]u8)string("]\xb8\xd8\x22")))
+    testing.expect_value(t, ip_to_string(record.data), "93.184.216.34")
 
     testing.expect_value(t, len(packet.authorities), 0)
     testing.expect_value(t, len(packet.additionals), 0)
@@ -295,4 +310,11 @@ test_parse_domain_name :: proc(t: ^testing.T) {
         t,
         slice.equal(parse_domain_name(&input_rdr), transmute([]u8)string("www.example.com")),
     )
+}
+
+ip_to_string :: proc(ip: []u8) -> string {
+    assert(len(ip) == 4)
+
+    sb: strings.Builder
+    return fmt.sbprintf(&sb, "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3])
 }
