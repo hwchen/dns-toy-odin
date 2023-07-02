@@ -117,3 +117,34 @@ test_read_response :: proc(t: ^testing.T) {
 
     testing.expect_value(t, header_from_reader(&response_rdr), DnsHeader { id = 24662, flags = 33152, num_questions = 1, num_answers = 1, num_authorities = 0, num_additionals = 0 })
 }
+
+// caller frees
+parse_domain_name :: proc(rdr: ^bytes.Reader) -> []u8 {
+    buf : bytes.Buffer
+    part_len_first, _ := bytes.reader_read_byte(rdr)
+    if part_len_first == 0 do return bytes.buffer_to_bytes(&buf)
+    for _ in 0..<part_len_first {
+        b, _ := bytes.reader_read_byte(rdr)
+        bytes.buffer_write_byte(&buf, b)
+    }
+
+    for {
+        part_len, _ := bytes.reader_read_byte(rdr)
+        if part_len == 0 do break
+        bytes.buffer_write_byte(&buf, '.')
+        for _ in 0..<part_len {
+            b, _ := bytes.reader_read_byte(rdr)
+            bytes.buffer_write_byte(&buf, b)
+        }
+    }
+
+    return bytes.buffer_to_bytes(&buf)
+}
+
+@(test)
+test_parse_domain_name :: proc(t: ^testing.T) {
+    input := "\x03www\x07example\x03com\x00\x00\x01\x00\x01"
+    input_rdr : bytes.Reader
+    bytes.reader_init(&input_rdr, transmute([]u8) input)
+    testing.expect(t, slice.equal(parse_domain_name(&input_rdr), transmute([]u8) string("www.example.com")))
+}
