@@ -11,8 +11,10 @@ import "core:slice"
 import "core:strings"
 import "core:testing"
 
-TYPE_A: u16be = 16
+TYPE_A: u16be = 1
+TYPE_NS: u16be = 2
 CLASS_IN: u16be = 1
+RECURSION_DESIRED: u16be = 1 << 8
 
 main :: proc() {
     if len(os.args) == 1 {
@@ -21,18 +23,35 @@ main :: proc() {
     }
     domain := os.args[1]
     addr := cast(net.IP4_Address){8, 8, 8, 8}
-    packet := query(addr, domain, TYPE_A)
+    packet := query(ip_address = addr, domain_name = domain, record_type = TYPE_A, flags = 0)
 
     for answer in packet.answers {
-        fmt.printf("answer: %s\n", ip_to_string(answer.data))
+        #partial switch d in answer.data {
+        case Address:
+            fmt.printf("answer: %s\n", ip_to_string(d))
+        case:
+            fmt.eprintln("Logic error, final answer must be an address")
+            os.exit(1)
+        }
     }
 }
 
-query :: proc(ip_address: net.IP4_Address, domain_name: string, record_type: u16be) -> DnsPacket {
+query :: proc(
+    ip_address: net.IP4_Address,
+    flags: u16be,
+    domain_name: string,
+    record_type: u16be,
+) -> DnsPacket {
     rng := rand.create(1)
     id := cast(u16be)rand.int_max(65_535, &rng)
     send_buf: bytes.Buffer
-    write_query(id, domain_name, record_type, &send_buf)
+    write_query(
+        domain_name = domain_name,
+        buf = &send_buf,
+        id = id,
+        flags = flags,
+        record_type = record_type,
+    )
 
     sock, _err := net.make_unbound_udp_socket(net.Address_Family.IP4)
     defer net.close(sock)
@@ -51,10 +70,16 @@ query :: proc(ip_address: net.IP4_Address, domain_name: string, record_type: u16
     return packet_from_reader(&resp_rdr)
 }
 
-write_query :: proc(id: u16be, domain_name: string, record_type: u16be, buf: ^bytes.Buffer) {
+write_query :: proc(
+    id: u16be,
+    flags: u16be,
+    domain_name: string,
+    record_type: u16be,
+    buf: ^bytes.Buffer,
+) {
     header := DnsHeader {
         id            = id,
-        flags         = 0,
+        flags         = flags,
         num_questions = 1,
     }
     question := DnsQuestion {
@@ -70,7 +95,13 @@ write_query :: proc(id: u16be, domain_name: string, record_type: u16be, buf: ^by
 @(test)
 test_write_query :: proc(t: ^testing.T) {
     buf: bytes.Buffer
-    write_query(0x8298, "www.example.com", TYPE_A, &buf)
+    write_query(
+        id = 0x8298,
+        domain_name = "www.example.com",
+        record_type = TYPE_A,
+        buf = &buf,
+        flags = RECURSION_DESIRED,
+    )
     expected, _ := hex.decode(
         transmute([]u8)string(
             "82980100000100000000000003777777076578616d706c6503636f6d0000010001",
@@ -150,14 +181,25 @@ DnsRecord :: struct {
     type:  u16be,
     class: u16be,
     ttl:   u32be,
-    data:  []u8,
+    data:  RecordData,
 }
+
+RecordData :: union {
+    Domain,
+    Address,
+    Raw,
+}
+
+Domain :: distinct string
+Address :: distinct net.IP4_Address
+Raw :: distinct []u8
 
 record_from_reader :: proc(rdr: ^bytes.Reader) -> DnsRecord {
     name := parse_domain_name(rdr)
 
     type_bytes: [2]u8
     bytes.reader_read(rdr, type_bytes[:])
+    type := transmute(u16be)type_bytes
 
     class_bytes: [2]u8
     bytes.reader_read(rdr, class_bytes[:])
@@ -169,19 +211,36 @@ record_from_reader :: proc(rdr: ^bytes.Reader) -> DnsRecord {
     bytes.reader_read(rdr, data_len_bytes[:])
     data_len := transmute(u16be)data_len_bytes
 
-    data_buf: bytes.Buffer
-    for _ in 0 ..< data_len {
-        b, _ := bytes.reader_read_byte(rdr)
-        bytes.buffer_write_byte(&data_buf, b)
+    data: RecordData
+    {
+        // TODO is there an extra allocation here?
+        data_buf: bytes.Buffer
+        for _ in 0 ..< data_len {
+            b, _ := bytes.reader_read_byte(rdr)
+            bytes.buffer_write_byte(&data_buf, b)
+        }
+        data_bytes := bytes.buffer_to_bytes(&data_buf)
+
+        if type == TYPE_NS {
+            rdr: bytes.Reader
+            bytes.reader_init(&rdr, data_bytes)
+            data = transmute(Domain)parse_domain_name(&rdr)
+        } else if type == TYPE_A {
+            ip: [4]u8
+            copy(ip[:], data_bytes[0:4])
+            data = cast(Address)ip
+        } else {
+            data = cast(Raw)data_bytes
+        }
     }
 
     return(
         DnsRecord{
             name = string(name),
-            type = transmute(u16be)type_bytes,
+            type = type,
             class = transmute(u16be)class_bytes,
             ttl = transmute(u32be)ttl_bytes,
-            data = bytes.buffer_to_bytes(&data_buf),
+            data = data,
         } \
     )
 }
@@ -263,8 +322,13 @@ test_read_response :: proc(t: ^testing.T) {
     testing.expect_value(t, record.type, 1)
     testing.expect_value(t, record.class, 1)
     testing.expect_value(t, record.ttl, 21147)
-    testing.expect(t, slice.equal(record.data, transmute([]u8)string("]\xb8\xd8\x22")))
-    testing.expect_value(t, ip_to_string(record.data), "93.184.216.34")
+    #partial switch d in record.data {
+    case Address:
+        //testing.expect(t, slice.equal(d, transmute(Address)string("]\xb8\xd8\x22")))
+        testing.expect_value(t, ip_to_string(d), "93.184.216.34")
+    case:
+        panic("Must be address")
+    }
 
     testing.expect_value(t, len(packet.authorities), 0)
     testing.expect_value(t, len(packet.additionals), 0)
@@ -313,9 +377,7 @@ test_parse_domain_name :: proc(t: ^testing.T) {
     )
 }
 
-ip_to_string :: proc(ip: []u8) -> string {
-    assert(len(ip) == 4)
-
+ip_to_string :: proc(ip: Address) -> string {
     sb: strings.Builder
     return fmt.sbprintf(&sb, "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3])
 }
