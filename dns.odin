@@ -11,9 +11,8 @@ import "core:slice"
 import "core:strings"
 import "core:testing"
 
-TYPE_A: u16be = 1
+TYPE_A: u16be = 16
 CLASS_IN: u16be = 1
-RECURSION_DESIRED: u16be = 1 << 8
 
 main :: proc() {
     if len(os.args) == 1 {
@@ -21,18 +20,25 @@ main :: proc() {
         os.exit(1)
     }
     domain := os.args[1]
+    addr := cast(net.IP4_Address){8, 8, 8, 8}
+    packet := query(addr, domain, TYPE_A)
 
-    send_buf: bytes.Buffer
+    for answer in packet.answers {
+        fmt.printf("answer: %s\n", ip_to_string(answer.data))
+    }
+}
 
+query :: proc(ip_address: net.IP4_Address, domain_name: string, record_type: u16be) -> DnsPacket {
     rng := rand.create(1)
     id := cast(u16be)rand.int_max(65_535, &rng)
-    write_query(id, domain, TYPE_A, &send_buf)
+    send_buf: bytes.Buffer
+    write_query(id, domain_name, record_type, &send_buf)
 
     sock, _err := net.make_unbound_udp_socket(net.Address_Family.IP4)
     defer net.close(sock)
 
     addr := net.Endpoint {
-        address = cast(net.IP4_Address){8, 8, 8, 8},
+        address = ip_address,
         port    = 53,
     }
     _, err := net.send_udp(sock, bytes.buffer_to_bytes(&send_buf), addr)
@@ -40,20 +46,15 @@ main :: proc() {
     recv_buf: [1024]u8
     bytes_read, _, _ := net.recv_udp(sock, recv_buf[:])
 
-    fmt.printf("raw response: %s\n", hex.encode(recv_buf[0:bytes_read]))
-
     resp_rdr: bytes.Reader
     bytes.reader_init(&resp_rdr, recv_buf[:bytes_read])
-    packet := packet_from_reader(&resp_rdr)
-    for answer in packet.answers {
-        fmt.printf("answer: %s\n", ip_to_string(answer.data))
-    }
+    return packet_from_reader(&resp_rdr)
 }
 
 write_query :: proc(id: u16be, domain_name: string, record_type: u16be, buf: ^bytes.Buffer) {
     header := DnsHeader {
         id            = id,
-        flags         = RECURSION_DESIRED,
+        flags         = 0,
         num_questions = 1,
     }
     question := DnsQuestion {
