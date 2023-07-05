@@ -23,7 +23,7 @@ main :: proc() {
     }
     domain := os.args[1]
     addr := cast(net.IP4_Address){8, 8, 8, 8}
-    packet := query(ip_address = addr, domain_name = domain, record_type = TYPE_A, flags = 0)
+    packet := query(addr, domain, record_type = TYPE_A, flags = 0)
 
     for answer in packet.answers {
         #partial switch d in answer.data {
@@ -38,20 +38,14 @@ main :: proc() {
 
 query :: proc(
     ip_address: net.IP4_Address,
-    flags: u16be,
     domain_name: string,
     record_type: u16be,
+    flags: u16be,
 ) -> DnsPacket {
     rng := rand.create(1)
     id := cast(u16be)rand.int_max(65_535, &rng)
     send_buf: bytes.Buffer
-    write_query(
-        domain_name = domain_name,
-        buf = &send_buf,
-        id = id,
-        flags = flags,
-        record_type = record_type,
-    )
+    write_query(domain_name, &send_buf, id = id, flags = flags, record_type = record_type)
 
     sock, _err := net.make_unbound_udp_socket(net.Address_Family.IP4)
     defer net.close(sock)
@@ -71,11 +65,11 @@ query :: proc(
 }
 
 write_query :: proc(
+    domain_name: string,
+    buf: ^bytes.Buffer,
     id: u16be,
     flags: u16be,
-    domain_name: string,
     record_type: u16be,
-    buf: ^bytes.Buffer,
 ) {
     header := DnsHeader {
         id            = id,
