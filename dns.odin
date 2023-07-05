@@ -22,8 +22,10 @@ main :: proc() {
         os.exit(1)
     }
     domain := os.args[1]
-    addr := cast(net.IP4_Address){8, 8, 8, 8}
+    addr := cast(net.IP4_Address){198, 41, 0, 4}
     packet := query(addr, domain, record_type = TYPE_A, flags = 0)
+
+    fmt.println(packet)
 
     for answer in packet.answers {
         #partial switch d in answer.data {
@@ -130,10 +132,6 @@ DnsQuestion :: struct {
     class: u16be,
 }
 
-question_destroy :: proc(question: DnsQuestion) {
-    delete(question.name)
-}
-
 question_write_buf :: proc(question: DnsQuestion, buf: ^bytes.Buffer) {
     parts := strings.split(question.name, ".")
 
@@ -162,7 +160,7 @@ question_from_reader :: proc(rdr: ^bytes.Reader) -> DnsQuestion {
 
     return(
         DnsQuestion{
-            name = string(name),
+            name = name,
             type = transmute(u16be)type_bytes,
             class = transmute(u16be)class_bytes,
         } \
@@ -218,7 +216,7 @@ record_from_reader :: proc(rdr: ^bytes.Reader) -> DnsRecord {
         if type == TYPE_NS {
             rdr: bytes.Reader
             bytes.reader_init(&rdr, data_bytes)
-            data = transmute(Domain)parse_domain_name(&rdr)
+            data = cast(Domain)parse_domain_name(&rdr)
         } else if type == TYPE_A {
             ip: [4]u8
             copy(ip[:], data_bytes[0:4])
@@ -230,7 +228,7 @@ record_from_reader :: proc(rdr: ^bytes.Reader) -> DnsRecord {
 
     return(
         DnsRecord{
-            name = string(name),
+            name = name,
             type = type,
             class = transmute(u16be)class_bytes,
             ttl = transmute(u32be)ttl_bytes,
@@ -328,10 +326,19 @@ test_read_response :: proc(t: ^testing.T) {
     testing.expect_value(t, len(packet.additionals), 0)
 }
 
-// caller frees
-parse_domain_name :: proc(rdr: ^bytes.Reader) -> []u8 {
+parse_domain_name :: proc(rdr: ^bytes.Reader) -> string {
     buf: bytes.Buffer
 
+    inner_parse_domain_name(rdr, &buf)
+
+    buf_len := bytes.buffer_length(&buf)
+    if buf_len > 0 {
+        bytes.buffer_truncate(&buf, buf_len - 1) // hack: remove last period, assumes there's at least one part
+    }
+    return transmute(string)bytes.buffer_to_bytes(&buf)
+}
+
+inner_parse_domain_name :: proc(rdr: ^bytes.Reader, out: ^bytes.Buffer) {
     for {
         part_len, _ := bytes.reader_read_byte(rdr)
         if part_len == 0 do break
@@ -343,21 +350,18 @@ parse_domain_name :: proc(rdr: ^bytes.Reader) -> []u8 {
             pointer := transmute(u16be)pointer_bytes
             current_pos := rdr.i
             bytes.reader_seek(rdr, cast(i64)pointer, io.Seek_From.Start)
-            result := parse_domain_name(rdr)
+            inner_parse_domain_name(rdr, out)
             bytes.reader_seek(rdr, cast(i64)current_pos, io.Seek_From.Start)
-            return result
+            break
         } else {
             // read directly
             for _ in 0 ..< part_len {
                 b, _ := bytes.reader_read_byte(rdr)
-                bytes.buffer_write_byte(&buf, b)
+                bytes.buffer_write_byte(out, b)
             }
+            bytes.buffer_write_byte(out, '.')
         }
-        bytes.buffer_write_byte(&buf, '.')
     }
-
-    bytes.buffer_truncate(&buf, bytes.buffer_length(&buf) - 1) // hack: remove last period, assumes there's at least one part
-    return bytes.buffer_to_bytes(&buf)
 }
 
 @(test)
@@ -365,10 +369,7 @@ test_parse_domain_name :: proc(t: ^testing.T) {
     input := "\x03www\x07example\x03com\x00\x00\x01\x00\x01"
     input_rdr: bytes.Reader
     bytes.reader_init(&input_rdr, transmute([]u8)input)
-    testing.expect(
-        t,
-        slice.equal(parse_domain_name(&input_rdr), transmute([]u8)string("www.example.com")),
-    )
+    testing.expect_value(t, parse_domain_name(&input_rdr), "www.example.com")
 }
 
 ip_to_string :: proc(ip: Address) -> string {
