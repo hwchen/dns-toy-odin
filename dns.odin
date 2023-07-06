@@ -208,6 +208,7 @@ record_from_reader :: proc(rdr: ^bytes.Reader) -> DnsRecord {
         if type == TYPE_NS {
             data = cast(Domain)parse_domain_name(rdr)
         } else if type == TYPE_A {
+            assert(data_len == 4)
             ip: [4]u8
             for i in 0 ..< data_len {
                 b, _ := bytes.reader_read_byte(rdr)
