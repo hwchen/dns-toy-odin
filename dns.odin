@@ -205,23 +205,23 @@ record_from_reader :: proc(rdr: ^bytes.Reader) -> DnsRecord {
 
     data: RecordData
     {
-        // TODO is there an extra allocation here?
-        data_buf: bytes.Buffer
-        for _ in 0 ..< data_len {
-            b, _ := bytes.reader_read_byte(rdr)
-            bytes.buffer_write_byte(&data_buf, b)
-        }
-        data_bytes := bytes.buffer_to_bytes(&data_buf)
-
         if type == TYPE_NS {
-            rdr: bytes.Reader
-            bytes.reader_init(&rdr, data_bytes)
-            data = cast(Domain)parse_domain_name(&rdr)
+            data = cast(Domain)parse_domain_name(rdr)
         } else if type == TYPE_A {
             ip: [4]u8
-            copy(ip[:], data_bytes[0:4])
-            data = cast(Address)ip
+            for i in 0 ..< data_len {
+                b, _ := bytes.reader_read_byte(rdr)
+                ip[i] = b
+                data = cast(Address)ip
+            }
         } else {
+            data_buf: bytes.Buffer
+            for _ in 0 ..< data_len {
+                b, _ := bytes.reader_read_byte(rdr)
+                bytes.buffer_write_byte(&data_buf, b)
+            }
+            data_bytes := bytes.buffer_to_bytes(&data_buf)
+
             data = cast(Raw)data_bytes
         }
     }
