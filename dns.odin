@@ -20,7 +20,7 @@ CLASS_IN: u16be = 1
 RECURSION_DESIRED: u16be = 1 << 8
 
 main :: proc() {
-    context.logger = log.create_console_logger(.Info)
+    context.logger = log.create_console_logger(.Debug)
     defer log.destroy_console_logger(context.logger)
 
     if len(os.args) == 1 {
@@ -42,27 +42,43 @@ resolve :: proc(domain_name: string, record_type: u16be) -> net.IP4_Address {
     for {
         packet := query(nameserver, domain_name, record_type, flags = 0)
         log.info("querying", nameserver, "for", domain_name)
+        log.debug(packet)
 
-        if ip, ok := packet_section_get_ip(packet.answers).?; ok {
-            return ip
-        } else if ns_ip, ok := packet_section_get_ip(packet.additionals).?; ok {
-            nameserver = ns_ip
+        if addr, ok := packet_section_get_data(packet.answers, TYPE_A).?; ok {
+            // If answer, can just return
+            #partial switch a in addr {
+            case Address:
+                return cast(net.IP4_Address)a
+            case:
+                panic("Logic bug, for answer, type A data must be address")
+            }
+        } else if ns_ip, ok := packet_section_get_data(packet.additionals, TYPE_A).?; ok {
+            // check additionals for IP address of next nameserver
+            #partial switch n in ns_ip {
+            case Address:
+                nameserver = cast(net.IP4_Address)n
+            case:
+                panic("Logic bug, for additional, type A data must be address")
+            }
+        } else if ns_addr, ok := packet_section_get_data(packet.authorities, TYPE_NS).?; ok {
+            // check additionals for IP address of next nameserver
+            #partial switch x in ns_addr {
+            case Domain:
+                return resolve(cast(string)x, record_type)
+            case:
+                panic("Logic bug, for authority, type NS data must be domain name")
+            }
         } else {
             panic("unresolvable")
         }
     }
 }
 
-packet_section_get_ip :: proc(packet_section: []DnsRecord) -> Maybe(net.IP4_Address) {
+packet_section_get_data :: proc(packet_section: []DnsRecord, type: u16be) -> Maybe(RecordData) {
     // first A record in section
     for record in packet_section {
-        if record.type == TYPE_A {
-            #partial switch d in record.data {
-            case Address:
-                return cast(net.IP4_Address)d
-            case:
-                panic("Logic bug, data must be address")
-            }
+        if record.type == type {
+            return record.data
         }
     }
     return nil
