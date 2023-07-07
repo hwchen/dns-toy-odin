@@ -3,6 +3,7 @@ package dns_toy
 import "core:bytes"
 import "core:fmt"
 import "core:encoding/hex"
+import "core:log"
 import "core:net"
 import "core:io"
 import "core:math/rand"
@@ -11,31 +12,60 @@ import "core:slice"
 import "core:strings"
 import "core:testing"
 
+ROOT_IP: net.IP4_Address = {198, 41, 0, 4}
+
 TYPE_A: u16be = 1
 TYPE_NS: u16be = 2
 CLASS_IN: u16be = 1
 RECURSION_DESIRED: u16be = 1 << 8
 
 main :: proc() {
+    context.logger = log.create_console_logger(.Info)
+    defer log.destroy_console_logger(context.logger)
+
     if len(os.args) == 1 {
         fmt.eprintln("Must supply a domain to resolve")
         os.exit(1)
     }
     domain := os.args[1]
-    addr := cast(net.IP4_Address){198, 41, 0, 4}
-    packet := query(addr, domain, record_type = TYPE_A, flags = 0)
 
-    fmt.println(packet)
+    answer := resolve(domain, TYPE_A)
 
-    for answer in packet.answers {
-        #partial switch d in answer.data {
-        case Address:
-            fmt.printf("answer: %s\n", ip_to_string(d))
-        case:
-            fmt.eprintln("Logic error, final answer must be an address")
-            os.exit(1)
+    fmt.println(ip_to_string(cast(Address)answer))
+}
+
+resolve :: proc(domain_name: string, record_type: u16be) -> net.IP4_Address {
+    // Start w/ hardcoded root ip for nameserver.
+    // As we iterate through loop, this will be updated down the chain of nameservers.
+    nameserver := ROOT_IP
+
+    for {
+        packet := query(nameserver, domain_name, record_type, flags = 0)
+        log.info("querying", nameserver, "for", domain_name)
+
+        if ip, ok := packet_section_get_ip(packet.answers).?; ok {
+            return ip
+        } else if ns_ip, ok := packet_section_get_ip(packet.additionals).?; ok {
+            nameserver = ns_ip
+        } else {
+            panic("unresolvable")
         }
     }
+}
+
+packet_section_get_ip :: proc(packet_section: []DnsRecord) -> Maybe(net.IP4_Address) {
+    // first A record in section
+    for record in packet_section {
+        if record.type == TYPE_A {
+            #partial switch d in record.data {
+            case Address:
+                return cast(net.IP4_Address)d
+            case:
+                panic("Logic bug, data must be address")
+            }
+        }
+    }
+    return nil
 }
 
 query :: proc(
