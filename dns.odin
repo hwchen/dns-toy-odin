@@ -20,7 +20,7 @@ CLASS_IN: u16be = 1
 RECURSION_DESIRED: u16be = 1 << 8
 
 main :: proc() {
-    context.logger = log.create_console_logger(.Debug)
+    context.logger = log.create_console_logger(.Info)
     defer log.destroy_console_logger(context.logger)
 
     if len(os.args) == 1 {
@@ -52,6 +52,9 @@ resolve :: proc(domain_name: string, record_type: u16be) -> net.IP4_Address {
             case:
                 panic("Logic bug, for answer, type A data must be address")
             }
+            // Alternatively, can cast. But less safe.
+            // Note that this cast require casting a pointer to the union value.
+            // return (cast(^net.IP4_Address)&addr)^
         } else if ns_ip, ok := packet_section_get_data(packet.additionals, TYPE_A).?; ok {
             // check additionals for IP address of next nameserver
             #partial switch n in ns_ip {
@@ -64,7 +67,7 @@ resolve :: proc(domain_name: string, record_type: u16be) -> net.IP4_Address {
             // check additionals for IP address of next nameserver
             #partial switch x in ns_addr {
             case Domain:
-                return resolve(cast(string)x, record_type)
+                nameserver = resolve(cast(string)x, record_type)
             case:
                 panic("Logic bug, for authority, type NS data must be domain name")
             }
