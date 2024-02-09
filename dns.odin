@@ -4,6 +4,7 @@ import "core:bytes"
 import "core:fmt"
 import "core:encoding/hex"
 import "core:log"
+import "core:mem"
 import "core:net"
 import "core:io"
 import "core:math/rand"
@@ -165,8 +166,8 @@ DnsHeader :: struct #packed {
 }
 
 header_write_buf :: proc(header: DnsHeader, buf: ^bytes.Buffer) {
-    header_bytes := transmute([12]u8)header
-    bytes.buffer_write(buf, header_bytes[:])
+    header := header
+    bytes.buffer_write(buf, mem.ptr_to_bytes(&header))
 }
 
 header_from_reader :: proc(rdr: ^bytes.Reader) -> DnsHeader {
@@ -191,11 +192,11 @@ question_write_buf :: proc(question: DnsQuestion, buf: ^bytes.Buffer) {
 
     bytes.buffer_write_byte(buf, 0)
 
-    type_bytes := transmute([2]u8)question.type
-    bytes.buffer_write(buf, type_bytes[:])
+    type := question.type
+    bytes.buffer_write(buf, mem.ptr_to_bytes(&type))
 
-    class_bytes := transmute([2]u8)question.class
-    bytes.buffer_write(buf, class_bytes[:])
+    class := question.class
+    bytes.buffer_write(buf, mem.ptr_to_bytes(&class))
 }
 
 question_from_reader :: proc(rdr: ^bytes.Reader) -> DnsQuestion {
